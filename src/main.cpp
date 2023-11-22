@@ -13,8 +13,8 @@ const uint8_t greenPin = 6;
 const uint8_t bluePin = 9;
 const uint8_t irPin = 2;
 
-const uint8_t MicPin = A0; 
-const uint8_t PotentiometerPin = A1;
+const uint8_t micPin = A0; 
+const uint8_t potentiometerPin = A1;
 #else
 const uint8_t redPin = 17;
 const uint8_t greenPin = 18;
@@ -32,9 +32,9 @@ const uint8_t channelStep = 20; // step for separate r,g,b channels manually (6 
 const float dimmingStep = 0.1; // step for dimming (0 row)
 
 const uint16_t defaultUpdateInterval = 5;
-const uint16_t automaticUpdateIntervalQuick = 10;
+const uint16_t automaticUpdateIntervalQuick = 20;
 const uint16_t automaticUpdateIntervalSlow = 100;
-const uint16_t musicUpdateInterval = 42;
+const uint16_t musicUpdateInterval = 50;
 const uint16_t commandInterval = 150;
 
 const uint16_t AmpMax = 512;
@@ -42,7 +42,7 @@ const uint16_t MicSamples = 100;
 // Sensitivity of microphone to amplify volume at processing stage. (0..)
 float Sensitivity = 3.1f;
 // Minimum brightness of LEDs to prevent fading to black. (0..255)
-const uint8_t MinBrightness = 0;
+const uint8_t MinBrightness = 10;
 // Value for brightness to fade per update (0..255)
 const uint8_t BrightnessFading = 4;
 // Minimum hue changing speed.
@@ -58,15 +58,11 @@ struct RGBcolor {
   
   RGBcolor(uint8_t r, uint8_t g, uint8_t b) : r(r), g(g), b(b) {};
   RGBcolor() {};
-};
 
-struct HSVcolor {
-  uint8_t h = 0;
-  uint8_t s = 0;
-  uint8_t v = 0;
-
-  HSVcolor(uint8_t h, uint8_t s, uint8_t v) : h(h), s(s), v(v) {};
-  HSVcolor() {};
+  RGBcolor operator*(float k) const {
+    k = constrain(k, 0, 1);
+    return { r * k, g * k, b * k };
+  }
 };
 
 void Increment(uint8_t& value, uint8_t increment)
@@ -102,86 +98,28 @@ struct DimmingState {
   float coef = 1;
   float coefT = 1;
 
-  bool turnedOnT = true;
-  float turnedOn = 1;
+  bool turnedOnT = false;
+  float turnedOn = 0;
 };
 
-HSVcolor RGBToHSV(RGBcolor rgb)
+RGBcolor HueToRGB(uint8_t hue) 
 {
-    HSVcolor hsv;
-    uint8_t rgbMin, rgbMax;
+  RGBcolor result;
 
-    rgbMin = rgb.r < rgb.g ? (rgb.r < rgb.b ? rgb.r : rgb.b) : (rgb.g < rgb.b ? rgb.g : rgb.b);
-    rgbMax = rgb.r > rgb.g ? (rgb.r > rgb.b ? rgb.r : rgb.b) : (rgb.g > rgb.b ? rgb.g : rgb.b);
-    
-    hsv.v = rgbMax;
-    if (hsv.v == 0)
-    {
-        hsv.h = 0;
-        hsv.s = 0;
-        return hsv;
-    }
+  hue <= 42 ?
+    result = {255, 255 * hue / 42., 0} :
+  hue > 42 && hue <= 85 ?
+    result = {255 * (43 - (hue - 42)) / 43., 255, 0} :
+  hue > 85 && hue <= 127 ?
+    result = {0, 255, 255 * (hue - 85) / 42.} :
+  hue > 127 && hue <= 170 ?
+    result = {0, 255 * (43 - (hue - 127)) / 43., 255} :
+  hue > 170 && hue <= 212 ?
+    result = {255 * (hue - 170) / 42., 0, 255} :
+  /*hue > 212 ?*/
+    result = {255, 0, 255 * (43 - (hue - 212)) / 43.};
 
-    hsv.s = 255 * long(rgbMax - rgbMin) / hsv.v;
-    if (hsv.s == 0)
-    {
-        hsv.h = 0;
-        return hsv;
-    }
-
-    if (rgbMax == rgb.r)
-        hsv.h = 0 + 43 * (rgb.g - rgb.b) / (rgbMax - rgbMin);
-    else if (rgbMax == rgb.g)
-        hsv.h = 85 + 43 * (rgb.b - rgb.r) / (rgbMax - rgbMin);
-    else
-        hsv.h = 171 + 43 * (rgb.r - rgb.g) / (rgbMax - rgbMin);
-
-    return hsv;
-}
-
-RGBcolor HSVToRGB(HSVcolor hsv)
-{
-    RGBcolor rgb;
-    uint8_t region, remainder, p, q, t;
-    
-    if (hsv.s == 0)
-    {
-        rgb.r = hsv.v;
-        rgb.g = hsv.v;
-        rgb.b = hsv.v;
-        return rgb;
-    }
-    
-    region = hsv.h / 43;
-    remainder = (hsv.h - (region * 43)) * 6; 
-    
-    p = (hsv.v * (255 - hsv.s)) >> 8;
-    q = (hsv.v * (255 - ((hsv.s * remainder) >> 8))) >> 8;
-    t = (hsv.v * (255 - ((hsv.s * (255 - remainder)) >> 8))) >> 8;
-    
-    switch (region)
-    {
-        case 0:
-            rgb.r = hsv.v; rgb.g = t; rgb.b = p;
-            break;
-        case 1:
-            rgb.r = q; rgb.g = hsv.v; rgb.b = p;
-            break;
-        case 2:
-            rgb.r = p; rgb.g = hsv.v; rgb.b = t;
-            break;
-        case 3:
-            rgb.r = p; rgb.g = q; rgb.b = hsv.v;
-            break;
-        case 4:
-            rgb.r = t; rgb.g = p; rgb.b = hsv.v;
-            break;
-        default:
-            rgb.r = hsv.v; rgb.g = p; rgb.b = q;
-            break;
-    }
-    
-    return rgb;
+  return result;
 }
 
 int MeasureVolume()
@@ -190,7 +128,7 @@ int MeasureVolume()
 
 	for (uint16_t i = 0; i < MicSamples; i++)
 	{
-		int k = analogRead(MicPin);
+		int k = analogRead(micPin);
 		int amp = abs(k - AmpMax);
 		soundVolRMS += ((long)amp*amp);
 	}
@@ -256,39 +194,18 @@ void updateColorStateNormal(ColorState& colorState)
 
 void updateColorStateRainbow(ColorState& colorState)
 {
-  static RGBcolor rainbow = {255, 0, 0};
-  static uint8_t currentTimeMoment = 0;
-
-  if(currentTimeMoment == 0)
-  {
-    rainbow = {255, 0, 0};
-  }
-  else if(currentTimeMoment <= 96)
-  {
-    Increment(rainbow.g, 255 / 96);
-    Decrement(rainbow.r, 255 / 96);
-  }
-  else if(currentTimeMoment > 96 && currentTimeMoment <= 160)
-  {
-    Increment(rainbow.b, 255 / 64);
-    Decrement(rainbow.g, 255 / 64);
-  }
-  else if(currentTimeMoment > 160)
-  {
-    Increment(rainbow.r, 255 / 95);
-    Decrement(rainbow.b, 255 / 95);
-  }
-
-  currentTimeMoment++;
-  colorState.color = rainbow;
+  static uint8_t hue = 0;
+  colorState.color = HueToRGB(hue++);
 }
 
 void updateColorStateMusic(ColorState& colorState)
 {
-  static HSVcolor hsvColor = {0, 0, 0};
+  // static HSVcolor hsvColor = {0, 0, 0};
   static int volume = 0;
+  static uint8_t hue = 0;
+  static uint8_t value = MinBrightness;
   
-  Sensitivity = analogRead(PotentiometerPin) / 256;
+  Sensitivity = analogRead(potentiometerPin) / 256;
 
   int newVolume = constrain(MeasureVolume() * Sensitivity, 0, 255);
 
@@ -298,19 +215,21 @@ void updateColorStateMusic(ColorState& colorState)
     volume = newVolume;
     
     uint8_t newValue = (255 - MinBrightness) / 255. * volume + MinBrightness;
-    hsvColor.v = max(newValue, hsvColor.v);
+    value = max(newValue, value);
   }
 
   uint8_t dHue = constrain(HueBaseDerivative + volume / VolumeToHueRatio, 0, 255);
-  hsvColor.h += dHue;
+  hue += dHue;
   
-  if(hsvColor.v >= BrightnessFading && hsvColor.v > (MinBrightness + BrightnessFading))
-    hsvColor.v -= BrightnessFading;
+  if(value >= BrightnessFading && value > (MinBrightness + BrightnessFading))
+    value -= BrightnessFading;
 
-  hsvColor.s = 255 - hsvColor.v / 2;
+  // hsvColor.s = 255 - hsvColor.v / 2;
 
-  RGBcolor converted = HSVToRGB(hsvColor);
-  colorState.color = converted;
+  // RGBcolor converted = HSVToRGB(hsvColor);
+
+  RGBcolor newColor = HueToRGB(hue) * (value / 255.);
+  colorState.color = newColor;
 }
 
 void setup() {
@@ -324,8 +243,8 @@ void setup() {
     pinMode(greenPin, 1);
     pinMode(bluePin, 1);
 
-    pinMode(MicPin, 0);
-    pinMode(PotentiometerPin, 0);
+    pinMode(micPin, 0);
+    pinMode(potentiometerPin, 0);
 
     analogReference(EXTERNAL); // 3.3V to AREF
 #else
@@ -343,9 +262,9 @@ void loop() {
   static TimerMs colorStateUpdateTimer(defaultUpdateInterval, 1, 0);
   static TimerMs ledStripUpdateTimer(defaultUpdateInterval, 1, 0);
 
-  static long previousCommandTime = millis();
+  static unsigned long previousCommandTime = millis();
 
-  static ColorState colorState;
+  static ColorState colorState = {{ 0, 0, 0 }, { 255, 140, 190 }};
   static DimmingState dimmingState;
 
   static void (*colorStateUpdater)(ColorState&) = &updateColorStateNormal; 
@@ -389,17 +308,17 @@ void loop() {
         break;
       }
       case 0x41: { // Pause
-        // long currentTime = millis();
+        long currentTime = millis();
 
-        // if(currentTime - previousCommandTime > commandInterval) {
-        //   if(colorStateUpdater == updateColorStateMusic) {
-        //     colorStateUpdater = updateColorStateNormal;
-        //     colorStateUpdateTimer.setTime(defaultUpdateInterval);
-        //   } else {
-        //     colorStateUpdater = updateColorStateMusic;
-        //     colorStateUpdateTimer.setTime(musicUpdateInterval);
-        //   }
-        // }
+        if(currentTime - previousCommandTime > commandInterval) {
+          if(colorStateUpdater == updateColorStateMusic) {
+            colorStateUpdater = updateColorStateNormal;
+            colorStateUpdateTimer.setTime(defaultUpdateInterval);
+          } else {
+            colorStateUpdater = updateColorStateMusic;
+            colorStateUpdateTimer.setTime(musicUpdateInterval);
+          }
+        }
         
         break;
       }
@@ -528,6 +447,27 @@ void loop() {
         break;
       }
 
+      // 4 ROW
+      case 0x1D: { // Cyan2
+        colorStateUpdater = updateColorStateNormal;
+        colorStateUpdateTimer.setTime(defaultUpdateInterval);
+
+        colorState.target.r = 0;
+        colorState.target.g = 180;
+        colorState.target.b = 170;
+        break;
+      }
+
+      // 5 ROW
+        case 0x19: { // Cyan3
+        colorStateUpdater = updateColorStateNormal;
+        colorStateUpdateTimer.setTime(defaultUpdateInterval);
+
+        colorState.target.r = 0;
+        colorState.target.g = 190;
+        colorState.target.b = 130;
+        break;
+      }
 
       // 6 ROW
       case 0x14: { // Red up

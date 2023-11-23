@@ -4,39 +4,48 @@
 #include <IRremote.hpp>
 #include <TimerMs.h>
 
+// Can be compiled either for arduino or for esp32
 #define INO
 //#define DEBUG
 
 #ifdef INO
-const uint8_t redPin = 5;
-const uint8_t greenPin = 6;
-const uint8_t bluePin = 9;
-const uint8_t irPin = 2;
+const uint8_t RedPin = 5;
+const uint8_t GreenPin = 6;
+const uint8_t BluePin = 9;
+const uint8_t IrPin = 2;
 
-const uint8_t micPin = A0; 
-const uint8_t potentiometerPin = A1;
+const uint8_t MicPin = A0; 
+const uint8_t PotentiometerPin = A1;
 #else
-const uint8_t redPin = 17;
-const uint8_t greenPin = 18;
-const uint8_t bluePin = 19;
-const uint8_t irPin = 34;
+const uint8_t RedPin = 17;
+const uint8_t GreenPin = 18;
+const uint8_t BluePin = 19;
+const uint8_t IrPin = 34;
 
-const uint freq = 1000; // PWM frequency
-const uint8_t resolution = 8; // DAC resolution
+// PWM frequency
+const uint PWMFreq = 1000; 
+// DAC resolution
+const uint8_t PWMResolution = 8;
 #endif
 
-const float dK = 0.01; // step for transitions of dimming coefficients
-const uint8_t dV = 2; // step for transitions of integer values like r,g,b components of light
+// Step for transitions of dimming coefficients
+const float dK = 0.01; 
+// Step for transitions of integer values like r, g, b components of light
+const uint8_t dV = 2;
+// Step for changing separate r, g, b channels manually (buttons on row 6)
+const uint8_t channelStep = 20;
+// Step for dimming (buttons on row 0)  
+const float dimmingStep = 0.1; 
 
-const uint8_t channelStep = 20; // step for separate r,g,b channels manually (6 row) 
-const float dimmingStep = 0.1; // step for dimming (0 row)
-
+// Intervals for updating color in different modes
 const uint16_t defaultUpdateInterval = 5;
 const uint16_t automaticUpdateIntervalQuick = 20;
 const uint16_t automaticUpdateIntervalSlow = 100;
 const uint16_t musicUpdateInterval = 50;
+// Interval that prevents odd commands because of long buttons pressing
 const uint16_t commandInterval = 150;
 
+// Microphone parameters
 const uint16_t AmpMax = 512;
 const uint16_t MicSamples = 100;
 // Sensitivity of microphone to amplify volume at processing stage. (0..)
@@ -49,7 +58,6 @@ const uint8_t BrightnessFading = 4;
 const uint8_t HueBaseDerivative = 0;
 // Volume amount needed for additional incrementation of hue. (0..255)
 const uint8_t VolumeToHueRatio = 15;
-
 
 struct RGBcolor {
   uint8_t r = 0;
@@ -65,30 +73,6 @@ struct RGBcolor {
   }
 };
 
-void Increment(uint8_t& value, uint8_t increment)
-{
-  if(255 - value >= increment)
-  {
-    value += increment;
-  }
-  else
-  {
-    value = 255;
-  }
-}
-
-void Decrement(uint8_t& value, uint8_t increment)
-{
-  if(value >= increment)
-  {
-    value -= increment;
-  }
-  else
-  {
-    value = 0;
-  }
-}
-
 struct ColorState {
   RGBcolor color;
   RGBcolor target;
@@ -102,6 +86,34 @@ struct DimmingState {
   float turnedOn = 0;
 };
 
+// Increment value with overflow protection
+void Increment(uint8_t& value, uint8_t increment)
+{
+  if(255 - value >= increment)
+  {
+    value += increment;
+  }
+  else
+  {
+    value = 255;
+  }
+}
+
+// Decrement value with overflow protection
+void Decrement(uint8_t& value, uint8_t increment)
+{
+  if(value >= increment)
+  {
+    value -= increment;
+  }
+  else
+  {
+    value = 0;
+  }
+}
+
+// Rough approximation of RGB color based on given hue value.
+// Uses linear approach, which is not quite correct but looks decent
 RGBcolor HueToRGB(uint8_t hue) 
 {
   RGBcolor result;
@@ -128,7 +140,7 @@ int MeasureVolume()
 
 	for (uint16_t i = 0; i < MicSamples; i++)
 	{
-		int k = analogRead(micPin);
+		int k = analogRead(MicPin);
 		int amp = abs(k - AmpMax);
 		soundVolRMS += ((long)amp*amp);
 	}
@@ -141,37 +153,39 @@ int MeasureVolume()
   return soundVolRMS;
 }
 
-void writeRGB(const RGBcolor& color, const DimmingState& dimmingState)
+void WriteRGB(const RGBcolor& color, const DimmingState& dimmingState)
 {
   #ifdef INO
-  analogWrite(redPin, color.r * dimmingState.coef * dimmingState.turnedOn);
-  analogWrite(greenPin, color.g * dimmingState.coef * dimmingState.turnedOn);
-  analogWrite(bluePin, color.b * dimmingState.coef * dimmingState.turnedOn);
+  analogWrite(RedPin, color.r * dimmingState.coef * dimmingState.turnedOn);
+  analogWrite(GreenPin, color.g * dimmingState.coef * dimmingState.turnedOn);
+  analogWrite(BluePin, color.b * dimmingState.coef * dimmingState.turnedOn);
   #else
-  ledcWrite(0, r);
-  ledcWrite(1, g);
-  ledcWrite(2, b);
+  ledcWrite(0, color.r * dimmingState.coef * dimmingState.turnedOn);
+  ledcWrite(1, color.g * dimmingState.coef * dimmingState.turnedOn);
+  ledcWrite(2, color.b * dimmingState.coef * dimmingState.turnedOn);
   #endif
 }
 
-void updateDimmingStateNormal(DimmingState& dimmingState)
+void UpdateDimmingStateNormal(DimmingState& dimmingState)
 {
-  float dimmingDiff = dimmingState.coef - dimmingState.coefT;
+  float diff;
+  
+  diff = dimmingState.coef - dimmingState.coefT;
 
-  if(dimmingDiff >= dK) dimmingState.coef -= dK;
-  else if(dimmingDiff <= dK && dimmingDiff > 0) dimmingState.coef = dimmingState.coefT;
-  else if(dimmingDiff <= -dK) dimmingState.coef += dK;
-  else if(dimmingDiff >= -dK && dimmingDiff < 0) dimmingState.coef = dimmingState.coefT;
+  if(diff >= dK) dimmingState.coef -= dK;
+  else if(diff <= dK && diff > 0) dimmingState.coef = dimmingState.coefT;
+  else if(diff <= -dK) dimmingState.coef += dK;
+  else if(diff >= -dK && diff < 0) dimmingState.coef = dimmingState.coefT;
 
-  float turnedOnDimmingDiff = dimmingState.turnedOn - dimmingState.turnedOnT;
+  diff = dimmingState.turnedOn - dimmingState.turnedOnT;
 
-  if(turnedOnDimmingDiff >= dK) dimmingState.turnedOn -= dK;
-  else if(turnedOnDimmingDiff <= dK && turnedOnDimmingDiff > 0) dimmingState.turnedOn = dimmingState.turnedOnT;
-  else if(turnedOnDimmingDiff <= -dK) dimmingState.turnedOn += dK;
-  else if(turnedOnDimmingDiff >= -dK && turnedOnDimmingDiff < 0) dimmingState.turnedOn = dimmingState.turnedOnT;
+  if(diff >= dK) dimmingState.turnedOn -= dK;
+  else if(diff <= dK && diff > 0) dimmingState.turnedOn = dimmingState.turnedOnT;
+  else if(diff <= -dK) dimmingState.turnedOn += dK;
+  else if(diff >= -dK && diff < 0) dimmingState.turnedOn = dimmingState.turnedOnT;
 }
 
-void updateColorStateNormal(ColorState& colorState)
+void UpdateColorStateNormal(ColorState& colorState)
 {
   int colorDiff = colorState.color.r - colorState.target.r;
   if(colorDiff > 0)
@@ -192,20 +206,19 @@ void updateColorStateNormal(ColorState& colorState)
     Increment(colorState.color.b, dV);
 }
 
-void updateColorStateRainbow(ColorState& colorState)
+void UpdateColorStateRainbow(ColorState& colorState)
 {
   static uint8_t hue = 0;
   colorState.color = HueToRGB(hue++);
 }
 
-void updateColorStateMusic(ColorState& colorState)
+void UpdateColorStateMusic(ColorState& colorState)
 {
-  // static HSVcolor hsvColor = {0, 0, 0};
   static int volume = 0;
   static uint8_t hue = 0;
   static uint8_t value = MinBrightness;
   
-  Sensitivity = analogRead(potentiometerPin) / 256;
+  Sensitivity = analogRead(PotentiometerPin) / 256;
 
   int newVolume = constrain(MeasureVolume() * Sensitivity, 0, 255);
 
@@ -224,37 +237,32 @@ void updateColorStateMusic(ColorState& colorState)
   if(value >= BrightnessFading && value > (MinBrightness + BrightnessFading))
     value -= BrightnessFading;
 
-  // hsvColor.s = 255 - hsvColor.v / 2;
-
-  // RGBcolor converted = HSVToRGB(hsvColor);
-
-  RGBcolor newColor = HueToRGB(hue) * (value / 255.);
-  colorState.color = newColor;
+  colorState.color = HueToRGB(hue) * (value / 255.);
 }
 
 void setup() {
 #ifdef DEBUG
     Serial.begin(115200);
 #endif
-    IrReceiver.begin(irPin, 13);
+    IrReceiver.begin(IrPin, 13);
 
 #ifdef INO
-    pinMode(redPin, 1);
-    pinMode(greenPin, 1);
-    pinMode(bluePin, 1);
+    pinMode(RedPin, 1);
+    pinMode(GreenPin, 1);
+    pinMode(BluePin, 1);
 
-    pinMode(micPin, 0);
-    pinMode(potentiometerPin, 0);
+    pinMode(MicPin, 0);
+    pinMode(PotentiometerPin, 0);
 
     analogReference(EXTERNAL); // 3.3V to AREF
 #else
-    ledcSetup(0, freq, resolution);
-    ledcSetup(1, freq, resolution);
-    ledcSetup(2, freq, resolution);
+    ledcSetup(0, PWMFreq, PWMResolution);
+    ledcSetup(1, PWMFreq, PWMResolution);
+    ledcSetup(2, PWMFreq, PWMResolution);
 
-    ledcAttachPin(redPin, 0);
-    ledcAttachPin(greenPin, 1);
-    ledcAttachPin(bluePin, 2);
+    ledcAttachPin(RedPin, 0);
+    ledcAttachPin(GreenPin, 1);
+    ledcAttachPin(BluePin, 2);
 #endif
 }
 
@@ -267,21 +275,25 @@ void loop() {
   static ColorState colorState = {{ 0, 0, 0 }, { 255, 140, 190 }};
   static DimmingState dimmingState;
 
-  static void (*colorStateUpdater)(ColorState&) = &updateColorStateNormal; 
-  static void (*dimmingStateUpdater)(DimmingState&) = &updateDimmingStateNormal; 
+  static void (*colorStateUpdater)(ColorState&) = &UpdateColorStateNormal; 
+  static void (*dimmingStateUpdater)(DimmingState&) = &UpdateDimmingStateNormal; 
 
   if(colorStateUpdateTimer.tick())
   {
     (*colorStateUpdater)(colorState);
   }
+
   if(ledStripUpdateTimer.tick())
   {
     (*dimmingStateUpdater)(dimmingState);
-    writeRGB(colorState.color, dimmingState);
+    WriteRGB(colorState.color, dimmingState);
   }
 
   if (IrReceiver.decode()) {
-    //IrReceiver.printIRResultShort(&Serial);
+    #ifdef DEBUG
+    IrReceiver.printIRResultShort(&Serial);
+    #endif
+
     IrReceiver.resume();
 
     switch(IrReceiver.decodedIRData.command)
@@ -289,53 +301,53 @@ void loop() {
       // 0 ROW
       case 0x5C: { // Up Value
         long currentTime = millis();
-        if(currentTime - previousCommandTime > commandInterval) {
-          if(dimmingState.coefT <= (1 - dimmingStep)) {
-          dimmingState.coefT += dimmingStep;
-          }
-          previousCommandTime = currentTime;
+        if(currentTime - previousCommandTime < commandInterval) break;
+
+        if(dimmingState.coefT <= (1 - dimmingStep)) {
+        dimmingState.coefT += dimmingStep;
         }
+        previousCommandTime = currentTime;
+
         break;
       }
       case 0x5D: { // Down Value
         long currentTime = millis();
-        if(currentTime - previousCommandTime > commandInterval) {
-          if(dimmingState.coefT >= 2 * dimmingStep) {
-          dimmingState.coefT -= dimmingStep;
-          }
-          previousCommandTime = currentTime;
+        if(currentTime - previousCommandTime < commandInterval) break;
+
+        if(dimmingState.coefT >= 2 * dimmingStep) {
+        dimmingState.coefT -= dimmingStep;
         }
+        previousCommandTime = currentTime;
+
         break;
       }
       case 0x41: { // Pause
         long currentTime = millis();
+        if(currentTime - previousCommandTime < commandInterval) break;
 
-        if(currentTime - previousCommandTime > commandInterval) {
-          if(colorStateUpdater == updateColorStateMusic) {
-            colorStateUpdater = updateColorStateNormal;
-            colorStateUpdateTimer.setTime(defaultUpdateInterval);
-          } else {
-            colorStateUpdater = updateColorStateMusic;
-            colorStateUpdateTimer.setTime(musicUpdateInterval);
-          }
+        if(colorStateUpdater == UpdateColorStateMusic) {
+          colorStateUpdater = UpdateColorStateNormal;
+          colorStateUpdateTimer.setTime(defaultUpdateInterval);
+        } else {
+          colorStateUpdater = UpdateColorStateMusic;
+          colorStateUpdateTimer.setTime(musicUpdateInterval);
         }
         
         break;
       }
       case 0x40: { // OFF ON
         long currentTime = millis();
-
-        if(currentTime - previousCommandTime > commandInterval) {
-          dimmingState.turnedOnT = !dimmingState.turnedOnT;
-          previousCommandTime = currentTime;
-        }
-        
+        if(currentTime - previousCommandTime < commandInterval) break;
+   
+        dimmingState.turnedOnT = !dimmingState.turnedOnT;
+        previousCommandTime = currentTime;
+   
         break;
       }
 
       // 1 ROW
       case 0x58: { // R
-        colorStateUpdater = updateColorStateNormal;
+        colorStateUpdater = UpdateColorStateNormal;
         colorStateUpdateTimer.setTime(defaultUpdateInterval);
         
         colorState.target.r = 255;
@@ -344,7 +356,7 @@ void loop() {
         break;
       }
       case 0x59: { // G
-        colorStateUpdater = updateColorStateNormal;
+        colorStateUpdater = UpdateColorStateNormal;
         colorStateUpdateTimer.setTime(defaultUpdateInterval);
 
         colorState.target.r = 0;
@@ -353,7 +365,7 @@ void loop() {
         break;
       }
       case 0x45: { // B
-        colorStateUpdater = updateColorStateNormal;
+        colorStateUpdater = UpdateColorStateNormal;
         colorStateUpdateTimer.setTime(defaultUpdateInterval);
 
         colorState.target.r = 0;
@@ -362,7 +374,7 @@ void loop() {
         break;
       }
         case 0x44: { // W
-        colorStateUpdater = updateColorStateNormal;
+        colorStateUpdater = UpdateColorStateNormal;
         colorStateUpdateTimer.setTime(defaultUpdateInterval);
 
         colorState.target.r = 255;
@@ -373,7 +385,7 @@ void loop() {
 
       // 2 ROW
       case 0x54: { // Orange
-        colorStateUpdater = updateColorStateNormal;
+        colorStateUpdater = UpdateColorStateNormal;
         colorStateUpdateTimer.setTime(defaultUpdateInterval);
 
         colorState.target.r = 230;
@@ -382,7 +394,7 @@ void loop() {
         break;
       }
       case 0x55: { // G
-        colorStateUpdater = updateColorStateNormal;
+        colorStateUpdater = UpdateColorStateNormal;
         colorStateUpdateTimer.setTime(defaultUpdateInterval);
 
         colorState.target.r = 0;
@@ -391,7 +403,7 @@ void loop() {
         break;
       }
       case 0x49: { // B
-        colorStateUpdater = updateColorStateNormal;
+        colorStateUpdater = UpdateColorStateNormal;
         colorStateUpdateTimer.setTime(defaultUpdateInterval);
 
         colorState.target.r = 15;
@@ -400,7 +412,7 @@ void loop() {
         break;
       }
       case 0x48: { // pink
-        colorStateUpdater = updateColorStateNormal;
+        colorStateUpdater = UpdateColorStateNormal;
         colorStateUpdateTimer.setTime(defaultUpdateInterval);
 
         colorState.target.r = 255;
@@ -411,7 +423,7 @@ void loop() {
 
       // 3 ROW
       case 0x50: { // Orange
-        colorStateUpdater = updateColorStateNormal;
+        colorStateUpdater = UpdateColorStateNormal;
         colorStateUpdateTimer.setTime(defaultUpdateInterval);
 
         colorState.target.r = 210;
@@ -420,7 +432,7 @@ void loop() {
         break;
       }
       case 0x51: { // Cyan1
-        colorStateUpdater = updateColorStateNormal;
+        colorStateUpdater = UpdateColorStateNormal;
         colorStateUpdateTimer.setTime(defaultUpdateInterval);
 
         colorState.target.r = 0;
@@ -429,7 +441,7 @@ void loop() {
         break;
       }
       case 0x4D: { // Purple
-        colorStateUpdater = updateColorStateNormal;
+        colorStateUpdater = UpdateColorStateNormal;
         colorStateUpdateTimer.setTime(defaultUpdateInterval);
 
         colorState.target.r = 200;
@@ -438,7 +450,7 @@ void loop() {
         break;
       }
       case 0x4C: { // pink
-        colorStateUpdater = updateColorStateNormal;
+        colorStateUpdater = UpdateColorStateNormal;
         colorStateUpdateTimer.setTime(defaultUpdateInterval);
 
         colorState.target.r = 255;
@@ -448,8 +460,17 @@ void loop() {
       }
 
       // 4 ROW
+      case 0x1C: { // Orange 2
+        colorStateUpdater = UpdateColorStateNormal;
+        colorStateUpdateTimer.setTime(defaultUpdateInterval);
+
+        colorState.target.r = 200;
+        colorState.target.g = 55;
+        colorState.target.b = 0;
+        break;
+      }
       case 0x1D: { // Cyan2
-        colorStateUpdater = updateColorStateNormal;
+        colorStateUpdater = UpdateColorStateNormal;
         colorStateUpdateTimer.setTime(defaultUpdateInterval);
 
         colorState.target.r = 0;
@@ -457,10 +478,37 @@ void loop() {
         colorState.target.b = 170;
         break;
       }
+      case 0x1E: { // Purple 2
+        colorStateUpdater = UpdateColorStateNormal;
+        colorStateUpdateTimer.setTime(defaultUpdateInterval);
+
+        colorState.target.r = 215;
+        colorState.target.g = 0;
+        colorState.target.b = 215;
+        break;
+      }
+      case 0x1F: { // Blue
+        colorStateUpdater = UpdateColorStateNormal;
+        colorStateUpdateTimer.setTime(defaultUpdateInterval);
+
+        colorState.target.r = 30;
+        colorState.target.g = 30;
+        colorState.target.b = 230;
+        break;
+      }
 
       // 5 ROW
-        case 0x19: { // Cyan3
-        colorStateUpdater = updateColorStateNormal;
+      case 0x18: { // Yellow
+        colorStateUpdater = UpdateColorStateNormal;
+        colorStateUpdateTimer.setTime(defaultUpdateInterval);
+
+        colorState.target.r = 220;
+        colorState.target.g = 70;
+        colorState.target.b = 0;
+        break;
+      }
+      case 0x19: { // Cyan3
+        colorStateUpdater = UpdateColorStateNormal;
         colorStateUpdateTimer.setTime(defaultUpdateInterval);
 
         colorState.target.r = 0;
@@ -468,40 +516,55 @@ void loop() {
         colorState.target.b = 130;
         break;
       }
+      case 0x1A: { // Purple 3
+        colorStateUpdater = UpdateColorStateNormal;
+        colorStateUpdateTimer.setTime(defaultUpdateInterval);
+
+        colorState.target.r = 230;
+        colorState.target.g = 0;
+        colorState.target.b = 230;
+        break;
+      }
+      case 0x1B: { // Blue
+        colorStateUpdater = UpdateColorStateNormal;
+        colorStateUpdateTimer.setTime(defaultUpdateInterval);
+
+        colorState.target.r = 30;
+        colorState.target.g = 30;
+        colorState.target.b = 230;
+        break;
+      }
 
       // 6 ROW
       case 0x14: { // Red up
         long currentTime = millis();
+        if(currentTime - previousCommandTime < commandInterval) break;
 
-        if(currentTime - previousCommandTime > commandInterval) {
-          Increment(colorState.target.r, channelStep);
-          previousCommandTime = currentTime;
-        }
+        Increment(colorState.target.r, channelStep);
+        previousCommandTime = currentTime;
         
         break;
       }
       case 0x15: { // Green up
         long currentTime = millis();
+        if(currentTime - previousCommandTime < commandInterval) break;
 
-        if(currentTime - previousCommandTime > commandInterval) {
-          Increment(colorState.target.g, channelStep);
-          previousCommandTime = currentTime;
-        }
-        
+        Increment(colorState.target.g, channelStep);
+        previousCommandTime = currentTime;
+  
         break;
       }
       case 0x16: { // Blue up
         long currentTime = millis();
-
-        if(currentTime - previousCommandTime > commandInterval) {
-          Increment(colorState.target.b, channelStep);
-          previousCommandTime = currentTime;
-        }
+        if(currentTime - previousCommandTime < commandInterval) break;
+        
+        Increment(colorState.target.b, channelStep);
+        previousCommandTime = currentTime;
         
         break;
       }
       case 0x17: { // "Quick"
-        colorStateUpdater = updateColorStateRainbow;
+        colorStateUpdater = UpdateColorStateRainbow;
         colorStateUpdateTimer.setTime(automaticUpdateIntervalQuick);
         break;
       }
@@ -509,37 +572,35 @@ void loop() {
       // 7 ROW
       case 0x10: { // Red down
         long currentTime = millis();
-        
-        if(currentTime - previousCommandTime > commandInterval) {
-          Decrement(colorState.target.r, channelStep);
-          previousCommandTime = currentTime;
-        }
-        
+        if(currentTime - previousCommandTime < commandInterval) break;
+
+        Decrement(colorState.target.r, channelStep);
+        previousCommandTime = currentTime;
+                
         break;
       }
       case 0x11: { // Green down
         long currentTime = millis();
+        if(currentTime - previousCommandTime < commandInterval) break;
 
-        if(currentTime - previousCommandTime > commandInterval) {
-          Decrement(colorState.target.g, channelStep);
-          previousCommandTime = currentTime;
-        }
+        Decrement(colorState.target.g, channelStep);
+        previousCommandTime = currentTime;
         
         break;
       }
       case 0x12: { // Blue down
         long currentTime = millis();
+        if(currentTime - previousCommandTime < commandInterval) break;
 
-        if(currentTime - previousCommandTime > commandInterval) {
-          Decrement(colorState.target.b, channelStep);
-          previousCommandTime = currentTime;
-        }
+        Decrement(colorState.target.b, channelStep);
+        previousCommandTime = currentTime;
         
         break;
       }
       case 0x13: { // "Slow"
-        colorStateUpdater = updateColorStateRainbow;
+        colorStateUpdater = UpdateColorStateRainbow;
         colorStateUpdateTimer.setTime(automaticUpdateIntervalSlow);
+
         break;
       }
     }

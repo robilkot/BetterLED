@@ -6,7 +6,7 @@
 
 // Can be compiled either for arduino or for esp32
 #define INO
-//#define MUSIC
+#define MUSIC
 //#define DEBUG
 
 #ifdef INO
@@ -34,7 +34,7 @@ const uint8_t dV = 2;
 // Step for changing separate r, g, b channels manually (buttons on row 6)
 const uint8_t channelStep = 20;
 // Step for dimming (buttons on row 0)  
-const float dimmingStep = 0.1; 
+const float dimmingStep = 0.05; 
 
 // Intervals for updating color in different modes
 const uint16_t defaultUpdateInterval = 3;
@@ -49,11 +49,11 @@ const uint16_t commandInterval = 150;
 const uint16_t AmpMax = 512;
 const uint16_t MicSamples = 100;
 // Sensitivity of microphone to amplify volume at processing stage. (0..)
-float Sensitivity = 3.1f;
+float Sensitivity = 1.6f;
 // Minimum brightness of LEDs to prevent fading to black. (0..255)
-const uint8_t MinBrightness = 10;
+const uint8_t MinBrightness = 15;
 // Value for brightness to fade per update (0..255)
-const uint8_t BrightnessFading = 4;
+const uint8_t BrightnessFading = 6;
 // Minimum hue changing speed.
 const uint8_t HueBaseDerivative = 0;
 // Volume amount needed for additional incrementation of hue. (0..255)
@@ -229,7 +229,7 @@ void UpdateColorStateMusic(ColorState& colorState)
   static uint8_t hue = 0;
   static uint8_t value = MinBrightness;
   
-  Sensitivity = analogRead(PotentiometerPin) / 256;
+  //Sensitivity = analogRead(PotentiometerPin) / 256;
 
   int newVolume = constrain(MeasureVolume() * Sensitivity, 0, 255);
 
@@ -345,10 +345,12 @@ void loop() {
 
         if(colorStateUpdater == UpdateColorStateMusic) {
           colorStateUpdater = UpdateColorStateNormal;
-          colorStateUpdateTimer.setTime(defaultUpdateInterval);
+          colorStateUpdateInterval = defaultUpdateInterval;
+          // colorStateUpdateTimer.setTime(defaultUpdateInterval);
         } else {
           colorStateUpdater = UpdateColorStateMusic;
-          colorStateUpdateTimer.setTime(musicUpdateInterval);
+          colorStateUpdateInterval = musicUpdateInterval;
+          // colorStateUpdateTimer.setTime(musicUpdateInterval);
         }
         #endif
 
